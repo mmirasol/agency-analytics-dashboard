@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { auth } from "@/auth";
 import SignOutButton from "./SignOutButton";
@@ -25,7 +24,7 @@ export const metadata: Metadata = {
 
 export default async function AccountPage() {
   const session = await auth();
-  if (!session) {
+  if (!session?.user) {
     return <SignInButton />;
   }
   const t = await getTranslations("Account");
