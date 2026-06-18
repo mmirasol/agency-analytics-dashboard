@@ -2,6 +2,55 @@ import { NextRequest, NextResponse } from "next/server";
 import { format, parse } from "date-fns";
 import { BetaAnalyticsDataClient } from "@google-analytics/data";
 
+function getServiceAccountCredentials() {
+  // Preferred: full JSON payload from Google Cloud service account key file.
+  if (process.env.GOOGLE_ANALYTICS_SERVICE_ACCOUNT_JSON) {
+    try {
+      const parsed = JSON.parse(process.env.GOOGLE_ANALYTICS_SERVICE_ACCOUNT_JSON);
+      if (!parsed.private_key || !parsed.client_email || !parsed.client_id) {
+        throw new Error("JSON is missing private_key, client_email, or client_id");
+      }
+
+      return {
+        ...parsed,
+        private_key: String(parsed.private_key).replace(/\\n/g, "\n"),
+      };
+    } catch (error) {
+      throw new Error("Invalid GOOGLE_ANALYTICS_SERVICE_ACCOUNT_JSON value");
+    }
+  }
+
+  // Backward-compatible env var set.
+  const requiredVars = [
+    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PROJECT_ID",
+    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY_ID",
+    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY",
+    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_CLIENT_EMAIL",
+    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_CLIENT_ID",
+  ] as const;
+
+  const missing = requiredVars.filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    throw new Error(`Missing GA credentials: ${missing.join(", ")}`);
+  }
+
+  return {
+    type: "service_account",
+    project_id: process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PROJECT_ID,
+    private_key_id: process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY_ID,
+    private_key: process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY!.replace(
+      /\\n/g,
+      "\n",
+    ),
+    client_email: process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_CLIENT_EMAIL,
+    client_id: process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_CLIENT_ID,
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+    universe_domain: "googleapis.com",
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { propertyId, startDate, endDate } = await request.json();
@@ -12,39 +61,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (
-      !process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY_ID ||
-      !process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY ||
-      !process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_CLIENT_ID
-    ) {
-      console.error("One or more GA env variables are missing");
+    let credentials;
+    try {
+      credentials = getServiceAccountCredentials();
+    } catch (error) {
+      console.error("GA credentials configuration error:", error);
       return NextResponse.json(
-        { error: "Server configuration error: Missing GA credentials" },
+        {
+          error:
+            "Server configuration error: missing/invalid GA service account credentials",
+        },
         { status: 500 },
       );
     }
-
-    const credentials = {
-      type: "service_account",
-      project_id: "advertisinganalytics-dashboard",
-      private_key_id:
-        process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY_ID,
-      // Replace escaped newlines with actual newline characters
-      private_key:
-        process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PRIVATE_KEY.replace(
-          /\\n/g,
-          "\n",
-        ),
-      client_email:
-        "google-analytics@advertisinganalytics-dashboard.iam.gserviceaccount.com",
-      client_id: process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_CLIENT_ID,
-      auth_uri: "https://accounts.google.com/o/oauth2/auth",
-      token_uri: "https://oauth2.googleapis.com/token",
-      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-      client_x509_cert_url:
-        "https://www.googleapis.com/robot/v1/metadata/x509/google-analytics%40advertisinganalytics-dashboard.iam.gserviceaccount.com",
-      universe_domain: "googleapis.com",
-    };
 
     // Create the GA Data API client with credentials
     const client = new BetaAnalyticsDataClient({ credentials });
